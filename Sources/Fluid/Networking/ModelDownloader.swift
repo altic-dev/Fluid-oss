@@ -302,25 +302,52 @@ extension HuggingFaceModelDownloader
     func loadLocalAsrModels(from repoDirectory: URL) async throws -> AsrModels
     {
         let config = AsrModels.defaultConfiguration()
+        let fm = FileManager.default
 
-        // Unified v3 model paths
-        let melEncUrl = repoDirectory.appendingPathComponent("MelEncoder.mlmodelc")
+        // Try to load with new naming convention first (Preprocessor + Encoder)
+        let preprocessorUrl = repoDirectory.appendingPathComponent("Preprocessor.mlmodelc")
+        let encoderUrl = repoDirectory.appendingPathComponent("Encoder.mlmodelc")
         let decUrl = repoDirectory.appendingPathComponent("Decoder.mlmodelc")
         let jointUrl = repoDirectory.appendingPathComponent("JointDecision.mlmodelc")
 
         print("[ModelDL] Loading v3 models from: \(repoDirectory.path)")
-        print("[ModelDL] MelEncoder path: \(melEncUrl.path)")
+        print("[ModelDL] Preprocessor path: \(preprocessorUrl.path)")
+        print("[ModelDL] Encoder path: \(encoderUrl.path)")
         print("[ModelDL] Decoder path: \(decUrl.path)")
         print("[ModelDL] JointDecision path: \(jointUrl.path)")
 
-        // Check existence
-        let fm = FileManager.default
-        print("[ModelDL] MelEncoder exists: \(fm.fileExists(atPath: melEncUrl.path))")
-        print("[ModelDL] Decoder exists: \(fm.fileExists(atPath: decUrl.path))")
-        print("[ModelDL] JointDecision exists: \(fm.fileExists(atPath: jointUrl.path))")
+        // Check if new structure exists
+        let hasNewStructure = fm.fileExists(atPath: preprocessorUrl.path) && fm.fileExists(atPath: encoderUrl.path)
+        
+        let preprocessor: MLModel
+        let encoder: MLModel
+        
+        if hasNewStructure {
+            // Load with new structure (separate Preprocessor and Encoder)
+            print("[ModelDL] Loading with new model structure (Preprocessor + Encoder)")
+            preprocessor = try MLModel(contentsOf: preprocessorUrl, configuration: config)
+            encoder = try MLModel(contentsOf: encoderUrl, configuration: config)
+        } else {
+            // Fallback: Try old structure (MelEncoder as both preprocessor and encoder)
+            let melEncUrl = repoDirectory.appendingPathComponent("MelEncoder.mlmodelc")
+            print("[ModelDL] New structure not found, trying legacy MelEncoder")
+            print("[ModelDL] MelEncoder path: \(melEncUrl.path)")
+            print("[ModelDL] MelEncoder exists: \(fm.fileExists(atPath: melEncUrl.path))")
+            
+            if fm.fileExists(atPath: melEncUrl.path) {
+                let melEncoder = try MLModel(contentsOf: melEncUrl, configuration: config)
+                // Use MelEncoder for both preprocessor and encoder
+                preprocessor = melEncoder
+                encoder = melEncoder
+                print("[ModelDL] Using MelEncoder for both preprocessor and encoder (legacy mode)")
+            } else {
+                throw NSError(domain: "ModelDL", code: -1, userInfo: [
+                    NSLocalizedDescriptionKey: "Neither new model structure (Preprocessor + Encoder) nor legacy structure (MelEncoder) found"
+                ])
+            }
+        }
 
-        // Load models with configuration
-        let melEncoder = try MLModel(contentsOf: melEncUrl, configuration: config)
+        // Load decoder and joint (same for both structures)
         let decoder = try MLModel(contentsOf: decUrl, configuration: config)
         let joint = try MLModel(contentsOf: jointUrl, configuration: config)
 
@@ -338,8 +365,12 @@ extension HuggingFaceModelDownloader
         }
 
         print("[ModelDL] Creating AsrModels (unified v3)")
+        
+        // Use the encoder as melEncoder (works with both old and new models)
+        // When using new model structure (Preprocessor + Encoder), encoder is separate
+        // When using old structure (MelEncoder), encoder IS the melEncoder
         return AsrModels(
-            melEncoder: melEncoder,
+            melEncoder: encoder,
             decoder: decoder,
             joint: joint,
             configuration: config,

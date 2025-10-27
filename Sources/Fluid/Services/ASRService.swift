@@ -45,6 +45,7 @@ final class ASRService: ObservableObject
 {
     @Published var isRunning: Bool = false
     @Published var finalText: String = ""
+    @Published var partialTranscription: String = ""
     @Published var micStatus: AVAuthorizationStatus = .notDetermined
     @Published var isAsrReady: Bool = false
     @Published var isDownloadingModel: Bool = false
@@ -67,6 +68,14 @@ final class ASRService: ObservableObject
 
     private var isRecordingWholeSession: Bool = false
     private var recordedPCM: [Float] = []
+
+    // Streaming transcription properties (timer-based, no VAD)
+    private var streamingTimer: Timer?
+    private var lastProcessedSampleCount: Int = 0
+    private let chunkDurationSeconds: Double = 1.5  // Faster updates!
+    private var isProcessingChunk: Bool = false
+    private var skipNextChunk: Bool = false
+    private var previousFullTranscription: String = ""
 
     private var audioLevelSubject = PassthroughSubject<CGFloat, Never>()
     var audioLevelPublisher: AnyPublisher<CGFloat, Never> { audioLevelSubject.eraseToAnyPublisher() }
@@ -133,6 +142,11 @@ final class ASRService: ObservableObject
 
         finalText.removeAll()
         recordedPCM.removeAll()
+        partialTranscription.removeAll()
+        previousFullTranscription.removeAll()
+        lastProcessedSampleCount = 0
+        isProcessingChunk = false
+        skipNextChunk = false
         isRecordingWholeSession = true
 
         do
@@ -141,6 +155,7 @@ final class ASRService: ObservableObject
             try startEngine()
             setupEngineTap()
             isRunning = true
+            startStreamingTranscription()
         }
         catch
         {
@@ -180,9 +195,14 @@ final class ASRService: ObservableObject
     func stop() async -> String
     {
         guard isRunning else { return "" }
+        stopStreamingTimer()
         removeEngineTap()
         engine.stop()
         isRunning = false
+        
+        isProcessingChunk = false
+        skipNextChunk = false
+        previousFullTranscription.removeAll()
 
         let pcm = recordedPCM
         recordedPCM.removeAll()
@@ -220,11 +240,17 @@ final class ASRService: ObservableObject
     func stopWithoutTranscription()
     {
         guard isRunning else { return }
+        stopStreamingTimer()
         removeEngineTap()
         engine.stop()
         isRunning = false
         recordedPCM.removeAll()
         isRecordingWholeSession = false
+        partialTranscription.removeAll()
+        previousFullTranscription.removeAll()
+        lastProcessedSampleCount = 0
+        isProcessingChunk = false
+        skipNextChunk = false
     }
 
     private func configureSession() throws
@@ -531,8 +557,8 @@ final class ASRService: ObservableObject
                 {
                     DebugLogger.shared.debug("Initializing AsrManager with models...", source: "ASRService")
                     try await manager.initialize(models: models)
-                    DebugLogger.shared.debug("AsrManager initialized successfully", source: "ASRService")
-                }
+                      DebugLogger.shared.debug("AsrManager initialized successfully", source: "ASRService")
+                  }
 
                 dup2(originalStderr, STDERR_FILENO)
                 close(originalStderr)
@@ -624,6 +650,112 @@ final class ASRService: ObservableObject
         try await ensureAsrReady()
     }
 
+    // MARK: - Timer-based Streaming Transcription (No VAD)
+    
+    private func startStreamingTranscription() {
+        stopStreamingTimer()
+        guard isAsrReady else { return }
+        
+        DebugLogger.shared.debug("Starting streaming transcription timer (every \(chunkDurationSeconds)s)", source: "ASRService")
+        
+        Task { @MainActor in
+            self.streamingTimer = Timer.scheduledTimer(withTimeInterval: self.chunkDurationSeconds, repeats: true) { [weak self] _ in
+                guard let self = self else { return }
+                Task { @MainActor in
+                    await self.processStreamingChunk()
+                }
+            }
+        }
+    }
+    
+    private func stopStreamingTimer() {
+        streamingTimer?.invalidate()
+        streamingTimer = nil
+    }
+    
+    @MainActor
+    private func processStreamingChunk() async {
+        guard isRunning else { return }
+        
+        // Prevent concurrent transcription
+        guard !isProcessingChunk else {
+            DebugLogger.shared.debug("⚠️ Skipping chunk - previous transcription still in progress", source: "ASRService")
+            skipNextChunk = true
+            return
+        }
+        
+        if skipNextChunk {
+            DebugLogger.shared.debug("⚠️ Skipping chunk for ANE recovery", source: "ASRService")
+            skipNextChunk = false
+            return
+        }
+        
+        guard isAsrReady, let manager = asrManager else { return }
+        
+        let currentSampleCount = recordedPCM.count
+        let minSamples = 16000  // 1 second minimum
+        guard currentSampleCount >= minSamples else { return }
+        
+        // Transcribe ALL audio from start (for full context)
+        let chunk = Array(recordedPCM[0..<currentSampleCount])
+        
+        isProcessingChunk = true
+        let startTime = Date()
+        
+        do {
+            let result = try await manager.transcribe(chunk, source: .microphone)
+            let duration = Date().timeIntervalSince(startTime)
+            let newText = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            
+            if !newText.isEmpty {
+                // Smart diff: only show truly new words
+                let updatedText = smartDiffUpdate(previous: previousFullTranscription, current: newText)
+                partialTranscription = updatedText
+                previousFullTranscription = newText
+                
+                DebugLogger.shared.debug("✅ Streaming: '\(updatedText)' (\(String(format: "%.2f", duration))s)", source: "ASRService")
+            }
+            
+            if duration > chunkDurationSeconds * 0.8 {
+                skipNextChunk = true
+            }
+        } catch {
+            DebugLogger.shared.error("❌ Streaming failed: \(error)", source: "ASRService")
+            skipNextChunk = true
+        }
+        
+        isProcessingChunk = false
+    }
+    
+    /// Smart diff to prevent text from jumping around
+    private func smartDiffUpdate(previous: String, current: String) -> String {
+        guard !previous.isEmpty else { return current }
+        guard !current.isEmpty else { return previous }
+        
+        let prevWords = previous.split(separator: " ").map(String.init)
+        let currWords = current.split(separator: " ").map(String.init)
+        
+        // Find longest common prefix
+        var commonPrefixLength = 0
+        for i in 0..<min(prevWords.count, currWords.count) {
+            if prevWords[i].lowercased().trimmingCharacters(in: .punctuationCharacters) ==
+               currWords[i].lowercased().trimmingCharacters(in: .punctuationCharacters) {
+                commonPrefixLength = i + 1
+            } else {
+                break
+            }
+        }
+        
+        // If >50% overlap, keep stable prefix and add new words
+        if commonPrefixLength > prevWords.count / 2 {
+            let stableWords = Array(currWords[0..<min(commonPrefixLength, currWords.count)])
+            let newWords = currWords.count > commonPrefixLength ? Array(currWords[commonPrefixLength...]) : []
+            return (stableWords + newWords).joined(separator: " ")
+        } else {
+            return current  // Significant change
+        }
+    }
+
     // MARK: - Typing convenience for compatibility
     private let typingService = TypingService() // Reuse instance to avoid conflicts
 
@@ -632,3 +764,4 @@ final class ASRService: ObservableObject
         typingService.typeTextInstantly(text)
     }
 }
+

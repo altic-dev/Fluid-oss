@@ -28,6 +28,7 @@ final class SettingsStore
         static let launchAtStartup = "LaunchAtStartup"
         static let showInDock = "ShowInDock"
         static let pressAndHoldMode = "PressAndHoldMode"
+        static let enableStreamingPreview = "EnableStreamingPreview"
     }
 
     struct SavedProvider: Codable, Identifiable, Hashable
@@ -133,6 +134,15 @@ final class SettingsStore
         set { defaults.set(newValue, forKey: Keys.pressAndHoldMode) }
     }
 
+    var enableStreamingPreview: Bool
+    {
+        get {
+            let value = defaults.object(forKey: Keys.enableStreamingPreview)
+            return value as? Bool ?? true // Default to true (enabled)
+        }
+        set { defaults.set(newValue, forKey: Keys.enableStreamingPreview) }
+    }
+
      var preferredInputDeviceUID: String?
      {
          get { defaults.string(forKey: Keys.preferredInputDeviceUID) }
@@ -193,8 +203,6 @@ final class SettingsStore
             updateDockVisibility(newValue)
         }
     }
-
-
 
     // MARK: - Private Methods
 

@@ -393,8 +393,6 @@ struct PremiumTalkingParticle: View {
 struct TalkingListeningOverlayView: View {
     let audioLevelPublisher: AnyPublisher<CGFloat, Never>
     @StateObject private var appTracker = ActiveAppTracker()
-    @State private var recordingTime: TimeInterval = 0
-    @State private var timer: Timer?
     
     private var appDisplayName: String {
         if let name = Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String, name.isEmpty == false {
@@ -416,140 +414,12 @@ struct TalkingListeningOverlayView: View {
     
     var body: some View {
         ZStack {
-            // Premium glassmorphism container
-            RoundedRectangle(cornerRadius: 16)
-                .fill(
-                    LinearGradient(
-                        gradient: Gradient(colors: [
-                            Color.black.opacity(0.7),
-                            Color.black.opacity(0.9)
-                        ]),
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
-                .background(
-                    RoundedRectangle(cornerRadius: 16)
-                        .fill(
-                            RadialGradient(
-                                gradient: Gradient(colors: [
-                                    Color.purple.opacity(0.2),
-                                    Color.black.opacity(0.4)
-                                ]),
-                                center: .center,
-                                startRadius: 0,
-                                endRadius: 100
-                            )
-                        )
-                        .blur(radius: 25)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 16)
-                        .stroke(
-                            LinearGradient(
-                                gradient: Gradient(colors: [
-                                    Color.white.opacity(0.2),
-                                    Color.cyan.opacity(0.1),
-                                    Color.purple.opacity(0.1),
-                                    Color.clear
-                                ]),
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            ),
-                            lineWidth: 1.5
-                        )
-                )
-                .overlay(
-                    // Inner glow
-                    RoundedRectangle(cornerRadius: 16)
-                        .stroke(
-                            Color.white.opacity(0.1),
-                            lineWidth: 0.5
-                        )
-                        .blur(radius: 1)
-                        .offset(x: -1, y: -1)
-                )
-            
-            // Timer - absolutely positioned top-left
-            Text(formatTime(recordingTime))
-                .font(.system(size: 12, weight: .medium, design: .monospaced))
-                .foregroundColor(.white.opacity(0.8))
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(
-                    RoundedRectangle(cornerRadius: 6)
-                        .fill(Color.black.opacity(0.5))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 6)
-                                .stroke(Color.white.opacity(0.1), lineWidth: 0.5)
-                        )
-                )
-                .padding(.leading, 12)
-                .padding(.top, 8)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            // NO BACKGROUND - Using unified container from ListeningOverlayController
             
             // Centered visualizer - absolutely positioned
             TalkingAudioVisualizationView(audioLevelPublisher: audioLevelPublisher)
             
-            // App name box - absolutely positioned top-right
-            HStack {
-                Spacer()
-                HStack(spacing: 6) {
-                    Image(systemName: "app.fill")
-                        .font(.caption2)
-                        .foregroundColor(.cyan.opacity(0.8))
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(appTracker.activeAppName)
-                            .font(.caption)
-                            .fontWeight(.medium)
-                            .foregroundColor(.white.opacity(0.95))
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                        if !appTracker.activeWindowTitle.isEmpty {
-                            Text(appTracker.activeWindowTitle)
-                                .font(.caption2)
-                                .foregroundColor(.white.opacity(0.7))
-                                .lineLimit(1)
-                                .truncationMode(.tail)
-                        }
-                    }
-                }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(
-                            LinearGradient(
-                                gradient: Gradient(colors: [
-                                    Color.black.opacity(0.6),
-                                    Color.black.opacity(0.8)
-                                ]),
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            )
-                        )
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 8)
-                                .stroke(
-                                    LinearGradient(
-                                        gradient: Gradient(colors: [
-                                            Color.cyan.opacity(0.3),
-                                            Color.purple.opacity(0.2),
-                                            Color.clear
-                                        ]),
-                                        startPoint: .topLeading,
-                                        endPoint: .bottomTrailing
-                                    ),
-                                    lineWidth: 1
-                                )
-                        )
-                )
-                .shadow(color: Color.black.opacity(0.4), radius: 3, x: 0, y: 2)
-                .padding(.trailing, 12)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-            
-            // Brand label - absolutely positioned bottom-right (wordmark if available, else icon + name)
+            // Brand label - absolutely positioned center-right (wordmark if available, else icon + name)
             HStack {
                 Spacer()
                 HStack(spacing: 4) {
@@ -559,7 +429,7 @@ struct TalkingListeningOverlayView: View {
                             .interpolation(.high)
                             .antialiased(true)
                             .scaledToFit()
-                            .frame(height: 35)
+                            .frame(height: 24)
                             .shadow(color: .black.opacity(0.5), radius: 1, x: 0, y: 1)
                     } else {
                         if let nsIcon = NSApp.applicationIconImage {
@@ -567,14 +437,14 @@ struct TalkingListeningOverlayView: View {
                                 .resizable()
                                 .interpolation(.high)
                                 .antialiased(true)
-                                .frame(width: 12, height: 12)
+                                .frame(width: 14, height: 14)
                                 .cornerRadius(3)
                                 .shadow(color: .black.opacity(0.5), radius: 1, x: 0, y: 1)
                         }
                         Text(appDisplayName.uppercased())
                             .font(.system(size: 11, weight: .semibold, design: .rounded))
-                            .kerning(0.6)
-                            .foregroundColor(.white.opacity(0.5))
+                            .kerning(0.5)
+                            .foregroundColor(.white.opacity(0.6))
                             .shadow(color: .black.opacity(0.8), radius: 2, x: 1, y: 1)
                             .shadow(color: .black.opacity(0.6), radius: 4, x: 2, y: 2)
                             .shadow(color: .black.opacity(0.3), radius: 8, x: 0, y: 0)
@@ -583,7 +453,7 @@ struct TalkingListeningOverlayView: View {
                 .padding(.horizontal, 8)
                 .padding(.vertical, 4)
                 .background(
-                    RoundedRectangle(cornerRadius: 12)
+                    RoundedRectangle(cornerRadius: 14)
                         .fill(
                             LinearGradient(
                                 gradient: Gradient(colors: [
@@ -595,7 +465,7 @@ struct TalkingListeningOverlayView: View {
                             )
                         )
                         .overlay(
-                            RoundedRectangle(cornerRadius: 12)
+                            RoundedRectangle(cornerRadius: 14)
                                 .stroke(
                                     Color.white.opacity(0.1),
                                     lineWidth: 0.5
@@ -604,46 +474,11 @@ struct TalkingListeningOverlayView: View {
                 )
                 .shadow(color: Color.black.opacity(0.3), radius: 2, x: 0, y: 1)
                 .padding(.trailing, 12)
-                .padding(.bottom, 8)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
         }
-        .frame(width: 280, height: 80)
-        .shadow(color: Color.black.opacity(0.6), radius: 25, x: 0, y: 15)
-        .shadow(color: Color.cyan.opacity(0.2), radius: 15, x: 0, y: 0)
-        .shadow(color: Color.purple.opacity(0.1), radius: 30, x: 0, y: 5)
-        .onAppear { startTimerIfNeeded() }
-        .onDisappear { stopTimer() }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onReceive(audioLevelPublisher) { _ in }
-    }
-    
-    private func startTimer() {
-        recordingTime = 0
-        timer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in
-            recordingTime += 0.1
-        }
-        if let timer {
-            RunLoop.main.add(timer, forMode: .common)
-        }
-    }
-
-    private func startTimerIfNeeded() {
-        if timer == nil {
-            startTimer()
-        }
-    }
-    
-    private func stopTimer() {
-        timer?.invalidate()
-        timer = nil
-        recordingTime = 0
-    }
-    
-    private func formatTime(_ time: TimeInterval) -> String {
-        let minutes = Int(time) / 60
-        let seconds = Int(time) % 60
-        let tenths = Int((time.truncatingRemainder(dividingBy: 1)) * 10)
-        return String(format: "%02d:%02d.%d", minutes, seconds, tenths)
     }
 }
 

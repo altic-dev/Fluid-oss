@@ -6,11 +6,11 @@ import PackageDescription
 let package = Package(
     name: "FluidVoice",
     platforms: [
-        .macOS(.v13)
+        .macOS(.v14)
     ],
     dependencies: [
         .package(url: "https://github.com/mxcl/AppUpdater.git", from: "1.0.0"),
-        .package(url: "https://github.com/FluidInference/FluidAudio", from: "0.5.0"),
+        .package(url: "https://github.com/FluidInference/FluidAudio", from: "0.7.4"),
         .package(url: "https://github.com/mxcl/PromiseKit", from: "6.0.0")
     ],
     targets: [

@@ -104,6 +104,7 @@ struct ContentView: View {
     @State private var enableAIProcessing: Bool = false
     @State private var enableDebugLogs: Bool = SettingsStore.shared.enableDebugLogs
     @State private var pressAndHoldModeEnabled: Bool = SettingsStore.shared.pressAndHoldMode
+    @State private var enableStreamingPreview: Bool = SettingsStore.shared.enableStreamingPreview
 
     // Preferences Tab State
     @State private var launchAtStartup: Bool = SettingsStore.shared.launchAtStartup
@@ -383,14 +384,22 @@ struct ContentView: View {
                     hosting.wantsLayer = true
                     hosting.layer?.cornerRadius = 20
                     hosting.layer?.masksToBounds = true
-                    self.overlay?.show(with: hosting)
+                    self.overlay?.show(with: hosting, showPreview: self.enableStreamingPreview)
                 }
             } else {
                 overlayVisible = false
                 DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
                     guard !self.overlayVisible else { return }
                     self.overlay?.hide()
+                    // Clear transcription text when hiding overlay
+                    self.overlay?.updateTranscriptionText("")
                 }
+            }
+        }
+        .onChange(of: asr.partialTranscription) { newText in
+            // Update overlay with streaming transcription preview (if enabled)
+            if enableStreamingPreview {
+                overlay?.updateTranscriptionText(newText)
             }
         }
     }
@@ -601,7 +610,12 @@ struct ContentView: View {
                                 step: 3,
                                 title: "Set Up AI Enhancement (Optional)",
                                 description: "Configure API keys for AI-powered text enhancement",
-                                status: (providerAPIKeys[currentProvider]?.isEmpty == false && availableModels.contains(selectedModel)) ? .completed : .pending,
+                                status: {
+                                    let hasApiKey = providerAPIKeys[currentProvider]?.isEmpty == false
+                                    let isLocal = isLocalEndpoint(openAIBaseURL.trimmingCharacters(in: .whitespacesAndNewlines))
+                                    let hasModel = availableModels.contains(selectedModel)
+                                    return ((isLocal || hasApiKey) && hasModel) ? .completed : .pending
+                                }(),
                                 action: {
                                     selectedSidebarItem = .aiProcessing
                                 }
@@ -1630,6 +1644,33 @@ struct ContentView: View {
                                 SettingsStore.shared.pressAndHoldMode = newValue
                                 hotkeyManager?.enablePressAndHoldMode(newValue)
                             }
+                            
+                            VStack(alignment: .leading, spacing: 12) {
+                                Toggle("Show Live Preview", isOn: $enableStreamingPreview)
+                                    .toggleStyle(GlassToggleStyle())
+                                Text("Display transcription text in real-time in the overlay as you speak. When disabled, only the animation is shown.")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 10)
+                            .background(
+                                RoundedRectangle(cornerRadius: 8)
+                                    .fill(.ultraThinMaterial.opacity(0.5))
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 8)
+                                            .stroke(.white.opacity(0.08), lineWidth: 1)
+                                    )
+                            )
+                            .onChange(of: enableStreamingPreview) { newValue in
+                                SettingsStore.shared.enableStreamingPreview = newValue
+                                // Dynamically resize overlay based on preview state
+                                overlay?.setPreviewEnabled(newValue)
+                                // Clear overlay text if disabled
+                                if !newValue {
+                                    overlay?.updateTranscriptionText("")
+                                }
+                            }
                         }
                     } else {
                         VStack(alignment: .leading, spacing: 16) {
@@ -1819,7 +1860,10 @@ struct ContentView: View {
                     
                     Spacer()
                     
-                    if enableAIProcessing && (providerAPIKeys[currentProvider] ?? "").trimmingCharacters(in: CharacterSet.whitespacesAndNewlines).isEmpty {
+                    // Only show API key warning for non-local endpoints
+                    if enableAIProcessing && 
+                       !isLocalEndpoint(openAIBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)) && 
+                       (providerAPIKeys[currentProvider] ?? "").trimmingCharacters(in: CharacterSet.whitespacesAndNewlines).isEmpty {
                         HStack {
                             Image(systemName: "exclamationmark.triangle.fill")
                                 .foregroundStyle(.orange)
@@ -1927,14 +1971,18 @@ struct ContentView: View {
 
                     // Status indicators
                     HStack(spacing: 16) {
-                        // API Key status
+                        // API Key status (or local endpoint indicator)
                         HStack(spacing: 4) {
-                            Image(systemName: (providerAPIKeys[currentProvider] ?? "").isEmpty ? "xmark.circle.fill" : "checkmark.circle.fill")
-                                .foregroundStyle((providerAPIKeys[currentProvider] ?? "").isEmpty ? .red : .green)
+                            let hasApiKey = !(providerAPIKeys[currentProvider] ?? "").isEmpty
+                            let isLocal = isLocalEndpoint(openAIBaseURL.trimmingCharacters(in: .whitespacesAndNewlines))
+                            let isConfigured = hasApiKey || isLocal
+                            
+                            Image(systemName: isConfigured ? "checkmark.circle.fill" : "xmark.circle.fill")
+                                .foregroundStyle(isConfigured ? .green : .red)
                                 .font(.caption)
-                            Text("API Key")
+                            Text(isLocal ? "Local" : "API Key")
                                 .font(.caption)
-                                .foregroundStyle((providerAPIKeys[currentProvider] ?? "").isEmpty ? .red : .green)
+                                .foregroundStyle(isConfigured ? .green : .red)
                         }
 
                         // Connection status
@@ -2027,6 +2075,8 @@ struct ContentView: View {
                     }
                 }
                 
+                Spacer()
+                
                 Button("+ Add Provider") {
                     showingSaveProvider = true
                     newProviderName = ""
@@ -2038,6 +2088,42 @@ struct ContentView: View {
                 .buttonHoverEffect()
             }
 
+            // Delete button for custom providers - positioned near model catalogs
+            HStack(spacing: 8) {
+                // Delete button for custom providers
+                if !selectedProviderID.isEmpty && selectedProviderID != "openai" && selectedProviderID != "groq" {
+                    Button(action: {
+                        // Remove the provider
+                        savedProviders.removeAll { $0.id == selectedProviderID }
+                        saveSavedProviders()
+                        
+                        // Remove associated data
+                        let key = providerKey(for: selectedProviderID)
+                        availableModelsByProvider.removeValue(forKey: key)
+                        selectedModelByProvider.removeValue(forKey: key)
+                        providerAPIKeys.removeValue(forKey: key)
+                        saveProviderAPIKeys()
+                        SettingsStore.shared.availableModelsByProvider = availableModelsByProvider
+                        SettingsStore.shared.selectedModelByProvider = selectedModelByProvider
+                        
+                        // Switch to OpenAI if we just deleted the current provider
+                        selectedProviderID = "openai"
+                        openAIBaseURL = "https://api.openai.com/v1"
+                        updateCurrentProvider()
+                        availableModels = defaultModels(for: "openai")
+                        selectedModel = availableModels.first ?? selectedModel
+                    }) {
+                        Image(systemName: "trash")
+                            .foregroundStyle(.red)
+                            .font(.caption)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Delete this provider")
+                }
+                
+                Spacer()
+            }
+            
             // Provider model catalogs quick links
             HStack(spacing: 6) {
                 Image(systemName: "link")
@@ -2110,7 +2196,9 @@ struct ContentView: View {
                     .clipShape(RoundedRectangle(cornerRadius: 6))
                 }
                 .buttonStyle(.plain)
-                .disabled(isTestingConnection || (providerAPIKeys[currentProvider] ?? "").isEmpty)
+                .disabled(isTestingConnection || 
+                         (!isLocalEndpoint(openAIBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)) && 
+                          (providerAPIKeys[currentProvider] ?? "").isEmpty))
                 .buttonHoverEffect()
 
                 Text("(\(currentProvider.capitalized))")
@@ -2123,7 +2211,7 @@ struct ContentView: View {
                     Text("Enter \(currentProvider.capitalized) API Key")
                         .font(.headline)
 
-                    SecureField("API Key", text: $newProviderApiKey)
+                    SecureField("API Key (optional for local endpoints)", text: $newProviderApiKey)
                         .textFieldStyle(.roundedBorder)
                         .frame(width: 300)
 
@@ -2144,7 +2232,9 @@ struct ContentView: View {
                             showAPIKeyEditor = false
                         }
                         .buttonStyle(.borderedProminent)
-                        .disabled(newProviderApiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        // Allow empty API key for local endpoints
+                        .disabled(!isLocalEndpoint(openAIBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)) && 
+                                 newProviderApiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     }
                 }
                 .padding()
@@ -2154,7 +2244,9 @@ struct ContentView: View {
             // Connection Status Display
             HStack(spacing: 8) {
                 // Real-time validation indicator
-                if (providerAPIKeys[currentProvider] ?? "").isEmpty {
+                // Only show API key warning for non-local endpoints
+                if (providerAPIKeys[currentProvider] ?? "").isEmpty && 
+                   !isLocalEndpoint(openAIBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)) {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .foregroundStyle(.orange)
                         .font(.caption)
@@ -2228,7 +2320,7 @@ struct ContentView: View {
                     }
 
                     HStack(spacing: 8) {
-                        SecureField("API Key", text: $newProviderApiKey)
+                        SecureField("API Key (optional for local)", text: $newProviderApiKey)
                             .textFieldStyle(.roundedBorder)
                             .frame(width: 300)
                         TextField("Available models (comma-separated)", text: $newProviderModels)
@@ -2286,9 +2378,16 @@ struct ContentView: View {
                         }
                         .buttonStyle(GlassButtonStyle())
                         .buttonHoverEffect()
-                        .disabled(newProviderName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
-                                  newProviderBaseURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
-                                  newProviderApiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        .disabled({
+                            let nameEmpty = newProviderName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                            let urlEmpty = newProviderBaseURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                            let apiKeyEmpty = newProviderApiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                            let isLocal = isLocalEndpoint(newProviderBaseURL.trimmingCharacters(in: .whitespacesAndNewlines))
+                            
+                            // Name and URL are always required
+                            // API key is only required for non-local endpoints
+                            return nameEmpty || urlEmpty || (!isLocal && apiKeyEmpty)
+                        }())
 
                         Button("Cancel") {
                             showingSaveProvider = false
@@ -2546,38 +2645,7 @@ struct ContentView: View {
     // MARK: - Meeting Transcription (Coming Soon)
     private var meetingToolsView: some View
     {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack(spacing: 8) {
-                Image(systemName: "person.2.wave.2.fill")
-                    .font(.title2)
-                Text("Meeting Tools")
-                    .font(.title3)
-                    .fontWeight(.semibold)
-            }
-
-            Text("Upload recordings and transcribe multi-speaker meetings. This is a playground where you can test transcription features.")
-                .foregroundStyle(.secondary)
-
-            RoundedRectangle(cornerRadius: 12)
-                .fill(.ultraThinMaterial)
-                .overlay(
-                    VStack(spacing: 12) {
-                        Image(systemName: "clock.badge.exclamationmark")
-                            .font(.system(size: 28, weight: .semibold))
-                            .foregroundStyle(.orange)
-                        Text("Coming Soon")
-                            .font(.headline)
-                        Text("This feature is in active development. A testing playground for transcription capabilities.")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                    }
-                    .padding(24)
-                )
-                .frame(maxWidth: .infinity, minHeight: 180)
-
-            Spacer()
-        }
-        .padding(20)
+        MeetingTranscriptionView()
     }
 
     // MARK: - Feedback View
@@ -2817,7 +2885,9 @@ struct ContentView: View {
         }
     }
 
-    private func saveProviderAPIKeys() { SettingsStore.shared.providerAPIKeys = providerAPIKeys }
+    private func saveProviderAPIKeys() {
+        SettingsStore.shared.providerAPIKeys = providerAPIKeys
+    }
     
     private func updateCurrentProvider() {
         // Map baseURL to canonical key for built-ins; else keep existing
@@ -2828,7 +2898,9 @@ struct ContentView: View {
         currentProvider = providerKey(for: selectedProviderID)
     }
     
-    private func saveSavedProviders() { SettingsStore.shared.savedProviders = savedProviders }
+    private func saveSavedProviders() {
+        SettingsStore.shared.savedProviders = savedProviders
+    }
 
     // MARK: - App Detection and Context-Aware Prompts
     private func getCurrentAppInfo() -> (name: String, bundleId: String, windowTitle: String) {
@@ -2992,17 +3064,73 @@ struct ContentView: View {
         }
         return base + "\n\n" + addendum + "\n\n" + context
     }
+    
+    // MARK: - Local Endpoint Detection
+    private func isLocalEndpoint(_ urlString: String) -> Bool {
+        guard let url = URL(string: urlString),
+              let host = url.host else { return false }
+        
+        let hostLower = host.lowercased()
+        
+        // Check for localhost variations
+        if hostLower == "localhost" || hostLower == "127.0.0.1" {
+            return true
+        }
+        
+        // Check for private IP ranges
+        // 127.x.x.x
+        if hostLower.hasPrefix("127.") {
+            return true
+        }
+        // 10.x.x.x
+        if hostLower.hasPrefix("10.") {
+            return true
+        }
+        // 192.168.x.x
+        if hostLower.hasPrefix("192.168.") {
+            return true
+        }
+        // 172.16.x.x - 172.31.x.x
+        if hostLower.hasPrefix("172.") {
+            let components = hostLower.split(separator: ".")
+            if components.count >= 2,
+               let secondOctet = Int(components[1]),
+               secondOctet >= 16 && secondOctet <= 31 {
+                return true
+            }
+        }
+        
+        return false
+    }
 
     // MARK: - Modular AI Processing
     private func processTextWithAI(_ inputText: String) async -> String {
         let endpoint = openAIBaseURL.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines).isEmpty ? "https://api.openai.com/v1" : openAIBaseURL.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
-        guard let url = URL(string: endpoint + "/chat/completions") else {
+        
+        // Build the full URL - only append /chat/completions if not already present
+        let fullEndpoint: String
+        if endpoint.contains("/chat/completions") || 
+           endpoint.contains("/api/chat") || 
+           endpoint.contains("/api/generate") {
+            // URL already has a complete path, use as-is
+            fullEndpoint = endpoint
+        } else {
+            // Append /chat/completions for OpenAI-compatible endpoints
+            fullEndpoint = endpoint + "/chat/completions"
+        }
+        
+        guard let url = URL(string: fullEndpoint) else {
             return "Error: Invalid Base URL"
         }
         
+        let isLocal = isLocalEndpoint(endpoint)
         let apiKey = providerAPIKeys[currentProvider] ?? ""
-        guard !apiKey.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines).isEmpty else {
-            return "Error: API Key not set for \(currentProvider)"
+        
+        // Skip API key validation for local endpoints
+        if !isLocal {
+            guard !apiKey.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines).isEmpty else {
+                return "Error: API Key not set for \(currentProvider)"
+            }
         }
 
         struct ChatMessage: Codable { let role: String; let content: String }
@@ -3032,11 +3160,28 @@ struct ContentView: View {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.addValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.addValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        
+        // Only add Authorization header for non-local endpoints
+        if !isLocal {
+            request.addValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        }
+        
         request.httpBody = jsonData
 
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
+            
+            // Debug: Print raw response
+            print("=== OLLAMA RESPONSE DEBUG (ContentView) ===")
+            print("Response URL: \(request.url?.absoluteString ?? "unknown")")
+            if let http = response as? HTTPURLResponse {
+                print("HTTP Status: \(http.statusCode)")
+            }
+            if let responseText = String(data: data, encoding: .utf8) {
+                print("Raw Response: \(responseText)")
+            }
+            print("==========================================")
+            
             if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
                 let errText = String(data: data, encoding: .utf8) ?? "Unknown error"
                 return "Error: HTTP \(http.statusCode): \(errText)"
@@ -3044,6 +3189,12 @@ struct ContentView: View {
             let decoded = try JSONDecoder().decode(ChatResponse.self, from: data)
             return decoded.choices.first?.message.content ?? "<no content>"
         } catch {
+            print("=== OLLAMA DECODE ERROR (ContentView) ===")
+            print("Error: \(error)")
+            if let decodingError = error as? DecodingError {
+                print("Decoding Error Details: \(decodingError)")
+            }
+            print("========================================")
             return "Error: \(error.localizedDescription)"
         }
     }
@@ -3062,7 +3213,13 @@ struct ContentView: View {
 
         let finalText: String
 
-        if enableAIProcessing && !(providerAPIKeys[currentProvider] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        // Check if we should use AI processing
+        let apiKey = (providerAPIKeys[currentProvider] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let baseURL = openAIBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        let isLocal = isLocalEndpoint(baseURL)
+        let shouldUseAI = enableAIProcessing && (isLocal || !apiKey.isEmpty)
+        
+        if shouldUseAI {
             DebugLogger.shared.debug("Routing transcription through AI post-processing", source: "ContentView")
             finalText = await processTextWithAI(transcribedText)
         } else {
@@ -3122,25 +3279,42 @@ struct ContentView: View {
 
         let apiKey = providerAPIKeys[currentProvider] ?? ""
         let baseURL = openAIBaseURL.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
+        let isLocal = isLocalEndpoint(baseURL)
 
         // Debug logging
-        DebugLogger.shared.info("API connection test started (provider: \(currentProvider), baseURL: \(baseURL))", source: "ContentView")
+        DebugLogger.shared.info("API connection test started (provider: \(currentProvider), baseURL: \(baseURL), isLocal: \(isLocal))", source: "ContentView")
         DebugLogger.shared.debug("API key supplied: \(!apiKey.isEmpty), length: \(apiKey.count)", source: "ContentView")
 
-        if !apiKey.hasPrefix("sk-") {
-            DebugLogger.shared.warning("PROBLEM: API key doesn't start with 'sk-' - this is likely the cause of the 401 error!", source: "ContentView")
-        }
-        if apiKey.count < 20 || apiKey.count > 200 {
-            DebugLogger.shared.warning("PROBLEM: API key length is unusual - should be 20-200 characters!", source: "ContentView")
+        // Only validate API key for non-local endpoints
+        if !isLocal {
+            if !apiKey.hasPrefix("sk-") {
+                DebugLogger.shared.warning("PROBLEM: API key doesn't start with 'sk-' - this is likely the cause of the 401 error!", source: "ContentView")
+            }
+            if apiKey.count < 20 || apiKey.count > 200 {
+                DebugLogger.shared.warning("PROBLEM: API key length is unusual - should be 20-200 characters!", source: "ContentView")
+            }
         }
 
-        guard !apiKey.isEmpty && !baseURL.isEmpty else {
-            DebugLogger.shared.error("Missing required fields - API key or base URL is empty", source: "ContentView")
-            await MainActor.run {
-                connectionStatus = .failed
-                connectionErrorMessage = "API key and base URL are required"
+        // For local endpoints, only baseURL is required
+        if isLocal {
+            guard !baseURL.isEmpty else {
+                DebugLogger.shared.error("Missing required field - base URL is empty", source: "ContentView")
+                await MainActor.run {
+                    connectionStatus = .failed
+                    connectionErrorMessage = "Base URL is required"
+                }
+                return
             }
-            return
+        } else {
+            // For remote endpoints, both API key and baseURL are required
+            guard !apiKey.isEmpty && !baseURL.isEmpty else {
+                DebugLogger.shared.error("Missing required fields - API key or base URL is empty", source: "ContentView")
+                await MainActor.run {
+                    connectionStatus = .failed
+                    connectionErrorMessage = "API key and base URL are required"
+                }
+                return
+            }
         }
 
         await MainActor.run {
@@ -3151,7 +3325,19 @@ struct ContentView: View {
 
         do {
             let endpoint = baseURL.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
-            let fullURL = endpoint + "/chat/completions"
+            
+            // Build the full URL - only append /chat/completions if not already present
+            let fullURL: String
+            if endpoint.contains("/chat/completions") || 
+               endpoint.contains("/api/chat") || 
+               endpoint.contains("/api/generate") {
+                // URL already has a complete path, use as-is
+                fullURL = endpoint
+            } else {
+                // Append /chat/completions for OpenAI-compatible endpoints
+                fullURL = endpoint + "/chat/completions"
+            }
+            
             DebugLogger.shared.debug("Full endpoint URL: \(fullURL)", source: "ContentView")
 
             guard let url = URL(string: fullURL) else {
@@ -3198,7 +3384,12 @@ struct ContentView: View {
             var request = URLRequest(url: url)
             request.httpMethod = "POST"
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+            
+            // Only add Authorization header for non-local endpoints
+            if !isLocal {
+                request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+            }
+            
             request.httpBody = jsonData
 
             // Log request details (mask API key for security)
@@ -3207,8 +3398,12 @@ struct ContentView: View {
             print("[DEBUG]   Method: \(request.httpMethod ?? "Unknown")")
             print("[DEBUG]   URL: \(request.url?.absoluteString ?? "Unknown")")
             print("[DEBUG]   Content-Type: \(request.value(forHTTPHeaderField: "Content-Type") ?? "Not set")")
-            print("[DEBUG]   Authorization header: \(request.value(forHTTPHeaderField: "Authorization") != nil ? "Set (Bearer \(maskedKey))" : "NOT SET - This is likely the problem!")")
-            print("[DEBUG]   Full Authorization header: \(request.value(forHTTPHeaderField: "Authorization") ?? "NOT SET")")
+            if isLocal {
+                print("[DEBUG]   Authorization header: Skipped (local endpoint detected)")
+            } else {
+                print("[DEBUG]   Authorization header: \(request.value(forHTTPHeaderField: "Authorization") != nil ? "Set (Bearer \(maskedKey))" : "NOT SET - This is likely the problem!")")
+                print("[DEBUG]   Full Authorization header: \(request.value(forHTTPHeaderField: "Authorization") ?? "NOT SET")")
+            }
             print("[DEBUG]   Body size: \(jsonData.count) bytes")
             if let bodyString = String(data: jsonData, encoding: .utf8) {
                 print("[DEBUG]   Request body: \(bodyString)")
@@ -3355,25 +3550,18 @@ struct ContentView: View {
             isSendingFeedback = true
         }
         
-        do {
-            let feedbackData = createFeedbackData()
-            let success = await submitFeedback(data: feedbackData)
-            
-            await MainActor.run {
-                isSendingFeedback = false
-                if success {
-                    // Show confirmation and clear form
-                    showFeedbackConfirmation = true
-                    feedbackText = ""
-                    feedbackEmail = ""
-                    includeDebugLogs = false
-                }
+        let feedbackData = createFeedbackData()
+        let success = await submitFeedback(data: feedbackData)
+        
+        await MainActor.run {
+            isSendingFeedback = false
+            if success {
+                // Show confirmation and clear form
+                showFeedbackConfirmation = true
+                feedbackText = ""
+                feedbackEmail = ""
+                includeDebugLogs = false
             }
-        } catch {
-            await MainActor.run {
-                isSendingFeedback = false
-            }
-            DebugLogger.shared.error("Failed to send feedback: \(error.localizedDescription)", source: "ContentView")
         }
     }
     

@@ -1,5 +1,5 @@
 {
-  "originHash" : "5fb64993316baee53fa040ae9eed2205d41e7618ec2ebd2fea554527d0b01783",
+  "originHash" : "0e9edc93872d7a92fcff2d2765dc22155b0d0f13274eb53dcac8ebcf9819b368",
   "pins" : [
     {
       "identity" : "appupdater",
@@ -8,6 +8,15 @@
       "state" : {
         "revision" : "1b60169700489f16cfbe2feb6b1e32ca5c9464b8",
         "version" : "1.1.1"
+      }
+    },
+    {
+      "identity" : "eventsource",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/mattt/eventsource.git",
+      "state" : {
+        "revision" : "a2965424a4babeb0c8e4b5ec9708c3939bc52449",
+        "version" : "1.2.0"
       }
     },
     {
@@ -44,6 +53,33 @@
       "state" : {
         "revision" : "8a98e31a47854d3180882c8068cc4d9381bf382d",
         "version" : "6.22.1"
+      }
+    },
+    {
+      "identity" : "swift-log",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/apple/swift-log.git",
+      "state" : {
+        "revision" : "ce592ae52f982c847a4efc0dd881cc9eb32d29f2",
+        "version" : "1.6.4"
+      }
+    },
+    {
+      "identity" : "swift-sdk",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/modelcontextprotocol/swift-sdk.git",
+      "state" : {
+        "revision" : "c0407a0b52677cb395d824cac2879b963075ba8c",
+        "version" : "0.10.2"
+      }
+    },
+    {
+      "identity" : "swift-system",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/apple/swift-system.git",
+      "state" : {
+        "revision" : "395a77f0aa927f0ff73941d7ac35f2b46d47c9db",
+        "version" : "1.6.3"
       }
     },
     {
