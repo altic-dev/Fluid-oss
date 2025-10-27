@@ -19,6 +19,7 @@ struct TranscriptionResult: Identifiable, Sendable, Codable {
 }
 
 /// Service for transcribing complete audio/video files with optional speaker diarization
+/// NOTE: This service shares the ASR models with ASRService to avoid duplicate memory usage
 @MainActor
 final class MeetingTranscriptionService: ObservableObject {
     @Published var isTranscribing: Bool = false
@@ -27,8 +28,12 @@ final class MeetingTranscriptionService: ObservableObject {
     @Published var error: String?
     @Published var result: TranscriptionResult?
     
-    private var asrManager: AsrManager?
-    private var models: AsrModels?
+    // Share the ASR service instance to avoid loading models twice
+    private let asrService: ASRService
+    
+    init(asrService: ASRService) {
+        self.asrService = asrService
+    }
     
     enum TranscriptionError: LocalizedError {
         case modelLoadFailed(String)
@@ -50,18 +55,15 @@ final class MeetingTranscriptionService: ObservableObject {
         }
     }
     
-    /// Initialize the ASR models (call this once at app startup or before first transcription)
+    /// Initialize the ASR models (reuses models from ASRService - no duplicate download!)
     func initializeModels() async throws {
-        guard models == nil else { return }
+        guard !asrService.isAsrReady else { return }
         
-        currentStatus = "Downloading ASR models..."
+        currentStatus = "Preparing ASR models..."
         progress = 0.1
         
         do {
-            models = try await AsrModels.downloadAndLoad()
-            
-            asrManager = AsrManager(config: .default)
-            try await asrManager?.initialize(models: models!)
+            try await asrService.ensureAsrReady()
             
             currentStatus = "Models ready"
             progress = 0.0
@@ -85,12 +87,12 @@ final class MeetingTranscriptionService: ObservableObject {
         }
         
         do {
-            // Initialize models if not already done
-            if models == nil {
+            // Initialize models if not already done (reuses ASRService models)
+            if !asrService.isAsrReady {
                 try await initializeModels()
             }
             
-            guard let asrManager = asrManager else {
+            guard let asrManager = asrService.asrManager else {
                 throw TranscriptionError.modelLoadFailed("ASR Manager not initialized")
             }
             

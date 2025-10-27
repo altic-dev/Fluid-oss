@@ -125,7 +125,7 @@ struct SpokenlyWaveform: View {
     @State private var lastUpdateTime: TimeInterval = 0
     @State private var isViewVisible: Bool = true
     
-    private let animationTimer = Timer.publish(every: 0.016, on: .main, in: .common).autoconnect() // 60 FPS base timer
+    private let animationTimer = Timer.publish(every: 0.033, on: .main, in: .common).autoconnect() // 30 FPS base timer - safer for CoreML concurrency
     
     var body: some View {
         HStack(spacing: config.barSpacing) {
@@ -163,8 +163,9 @@ struct SpokenlyWaveform: View {
     private func updateBars() {
         let currentTime = Date().timeIntervalSince1970
         
-        // Simple frame limiting - much more responsive
-        let frameTime = 1.0 / 60.0 // 60 FPS always for real-time feel
+        // Adaptive frame limiting - reduce rate during active processing to prevent CoreML conflicts
+        let targetFPS: Double = isActive ? 30.0 : 20.0  // Lower FPS to reduce state update conflicts
+        let frameTime = 1.0 / targetFPS
         if currentTime - lastUpdateTime < frameTime { return }
         lastUpdateTime = currentTime
         

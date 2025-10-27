@@ -19,6 +19,7 @@ final class SettingsStore
         static let availableModelsByProvider = "AvailableModelsByProvider"
         static let selectedAIModel = "SelectedAIModel"
         static let selectedModelByProvider = "SelectedModelByProvider"
+        static let selectedProviderID = "SelectedProviderID"
         static let providerAPIKeys = "ProviderAPIKeys"
         static let savedProviders = "SavedProviders"
         static let hotkeyShortcutKey = "HotkeyShortcutKey"
@@ -29,6 +30,7 @@ final class SettingsStore
         static let showInDock = "ShowInDock"
         static let pressAndHoldMode = "PressAndHoldMode"
         static let enableStreamingPreview = "EnableStreamingPreview"
+        static let copyTranscriptionToClipboard = "CopyTranscriptionToClipboard"
     }
 
     struct SavedProvider: Codable, Identifiable, Hashable
@@ -91,6 +93,12 @@ final class SettingsStore
         set { defaults.set(newValue, forKey: Keys.providerAPIKeys) }
     }
 
+    var selectedProviderID: String
+    {
+        get { defaults.string(forKey: Keys.selectedProviderID) ?? "openai" }
+        set { defaults.set(newValue, forKey: Keys.selectedProviderID) }
+    }
+
     var savedProviders: [SavedProvider]
     {
         get
@@ -141,6 +149,12 @@ final class SettingsStore
             return value as? Bool ?? true // Default to true (enabled)
         }
         set { defaults.set(newValue, forKey: Keys.enableStreamingPreview) }
+    }
+
+    var copyTranscriptionToClipboard: Bool
+    {
+        get { defaults.bool(forKey: Keys.copyTranscriptionToClipboard) }
+        set { defaults.set(newValue, forKey: Keys.copyTranscriptionToClipboard) }
     }
 
      var preferredInputDeviceUID: String?

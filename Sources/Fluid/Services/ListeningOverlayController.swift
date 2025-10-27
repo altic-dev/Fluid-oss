@@ -72,12 +72,53 @@ final class ListeningOverlayController
         
         panel?.contentView = container
         positionCenteredLower()
+        
+        // Set initial state for entrance animation
+        container.wantsLayer = true
+        container.layer?.anchorPoint = CGPoint(x: 0.5, y: 0.5)
+        container.alphaValue = 0.0
+        
+        // Apply initial transform: scale 0.85 and translate Y -10px
+        let initialTransform = CATransform3DIdentity
+        let scaledTransform = CATransform3DScale(initialTransform, 0.85, 0.85, 1.0)
+        let translatedTransform = CATransform3DTranslate(scaledTransform, 0, -10, 0)
+        container.layer?.transform = translatedTransform
+        
         panel?.orderFrontRegardless()
+        
+        // Animate entrance with spring effect
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = 0.3
+            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            context.allowsImplicitAnimation = true
+            
+            // Animate to final state: scale 1.0, opacity 1.0, Y position 0
+            container.animator().alphaValue = 1.0
+            container.layer?.transform = CATransform3DIdentity
+        })
     }
 
     func hide()
     {
-        panel?.orderOut(nil)
+        guard let container = unifiedContainer else {
+            panel?.orderOut(nil)
+            return
+        }
+        
+        // Animate exit before hiding panel
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = 0.2
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            context.allowsImplicitAnimation = true
+            
+            // Animate scale down and fade out
+            container.animator().alphaValue = 0.0
+            let exitTransform = CATransform3DScale(CATransform3DIdentity, 0.9, 0.9, 1.0)
+            container.layer?.transform = exitTransform
+        }, completionHandler: {
+            // Hide panel after animation completes
+            self.panel?.orderOut(nil)
+        })
     }
 
     private func activeScreen() -> NSScreen?

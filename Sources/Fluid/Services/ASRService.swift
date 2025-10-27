@@ -49,7 +49,7 @@ final class ASRService: ObservableObject
     @Published var micStatus: AVAuthorizationStatus = .notDetermined
     @Published var isAsrReady: Bool = false
     @Published var isDownloadingModel: Bool = false
-    @Published var modelDownloadProgress: Double = 0.0
+    @Published var modelsExistOnDisk: Bool = false
     @Published var selectedModel: ModelOption = .parakeetTdt06bV3
 
     enum ModelOption: String, CaseIterable, Identifiable, Hashable
@@ -64,7 +64,8 @@ final class ASRService: ObservableObject
     private var inputFormat: AVAudioFormat?
     private var micPermissionGranted = false
 
-    private var asrManager: AsrManager?
+    // Internal access for MeetingTranscriptionService to share models
+    var asrManager: AsrManager?
 
     private var isRecordingWholeSession: Bool = false
     private var recordedPCM: [Float] = []
@@ -72,10 +73,11 @@ final class ASRService: ObservableObject
     // Streaming transcription properties (timer-based, no VAD)
     private var streamingTimer: Timer?
     private var lastProcessedSampleCount: Int = 0
-    private let chunkDurationSeconds: Double = 1.5  // Faster updates!
+    private let chunkDurationSeconds: Double = 2.0  // Safer interval to prevent ANE/CoreML conflicts
     private var isProcessingChunk: Bool = false
     private var skipNextChunk: Bool = false
     private var previousFullTranscription: String = ""
+    private let processingLock = NSLock() // Prevent concurrent CoreML access
 
     private var audioLevelSubject = PassthroughSubject<CGFloat, Never>()
     var audioLevelPublisher: AnyPublisher<CGFloat, Never> { audioLevelSubject.eraseToAnyPublisher() }
@@ -92,6 +94,28 @@ final class ASRService: ObservableObject
         self.micStatus = AVCaptureDevice.authorizationStatus(for: .audio)
         self.micPermissionGranted = (self.micStatus == .authorized)
         registerDefaultDeviceChangeListener()
+        checkIfModelsExist()
+        
+        // Auto-load models if they exist on disk to avoid "Downloaded but not loaded" state
+        if modelsExistOnDisk {
+            DebugLogger.shared.info("Models found on disk, auto-loading...", source: "ASRService")
+            Task {
+                do {
+                    try await ensureAsrReady()
+                    DebugLogger.shared.info("Models auto-loaded successfully on startup", source: "ASRService")
+                } catch {
+                    DebugLogger.shared.error("Failed to auto-load models on startup: \(error)", source: "ASRService")
+                }
+            }
+        }
+    }
+    
+    /// Check if models exist on disk without loading them
+    func checkIfModelsExist() {
+        let baseCacheDir = AsrModels.defaultCacheDirectory().deletingLastPathComponent()
+        let v3CacheDir = baseCacheDir.appendingPathComponent("parakeet-tdt-0.6b-v3-coreml")
+        modelsExistOnDisk = FileManager.default.fileExists(atPath: v3CacheDir.path)
+        DebugLogger.shared.debug("Models exist on disk: \(modelsExistOnDisk)", source: "ASRService")
     }
 
 
@@ -195,6 +219,11 @@ final class ASRService: ObservableObject
     func stop() async -> String
     {
         guard isRunning else { return "" }
+        
+        // CRITICAL: Wait for any in-flight transcription to complete
+        processingLock.lock()
+        processingLock.unlock()
+        
         stopStreamingTimer()
         removeEngineTap()
         engine.stop()
@@ -204,6 +233,7 @@ final class ASRService: ObservableObject
         skipNextChunk = false
         previousFullTranscription.removeAll()
 
+        // Thread-safe copy of recorded audio
         let pcm = recordedPCM
         recordedPCM.removeAll()
         isRecordingWholeSession = false
@@ -240,6 +270,11 @@ final class ASRService: ObservableObject
     func stopWithoutTranscription()
     {
         guard isRunning else { return }
+        
+        // CRITICAL: Wait for any in-flight transcription to complete
+        processingLock.lock()
+        processingLock.unlock()
+        
         stopStreamingTimer()
         removeEngineTap()
         engine.stop()
@@ -471,7 +506,7 @@ final class ASRService: ObservableObject
     /// ## Model Management
     /// - Models are downloaded from the configured Hugging Face repository
     /// - Downloads are cached to avoid repeated network requests
-    /// - Progress is reported via `isDownloadingModel` and `modelDownloadProgress`
+    /// - Download state is reported via `isDownloadingModel`
     /// - Models include: melspectrogram, encoder, decoder, joint, and token prediction
     ///
     /// ## Performance
@@ -535,16 +570,15 @@ final class ASRService: ObservableObject
 
                 DispatchQueue.main.async {
                     self.isDownloadingModel = true
-                    self.modelDownloadProgress = 0.0
-                    DebugLogger.shared.info("Model download flagged as in-progress (progress=0)", source: "ASRService")
+                    DebugLogger.shared.info("Model download flagged as in-progress", source: "ASRService")
                 }
                 DebugLogger.shared.debug("Invoking AsrModels.downloadAndLoad()", source: "ASRService")
                 let models = try await AsrModels.downloadAndLoad()
                 DebugLogger.shared.info("AsrModels.downloadAndLoad() returned successfully", source: "ASRService")
                 DispatchQueue.main.async {
                     self.isDownloadingModel = false
-                    self.modelDownloadProgress = 1.0
-                    DebugLogger.shared.info("Model download marked complete (progress=1)", source: "ASRService")
+                    self.modelsExistOnDisk = true
+                    DebugLogger.shared.info("Model download marked complete", source: "ASRService")
                 }
                 DebugLogger.shared.debug("FluidAudio models loaded successfully (v3)", source: "ASRService")
                 
@@ -571,10 +605,9 @@ final class ASRService: ObservableObject
                 DebugLogger.shared.error("Error details: \(error.localizedDescription)", source: "ASRService")
                 DispatchQueue.main.async {
                     if self.isDownloadingModel {
-                        DebugLogger.shared.warning("Model download aborted due to error; resetting progress state", source: "ASRService")
+                        DebugLogger.shared.warning("Model download aborted due to error; resetting state", source: "ASRService")
                     }
                     self.isDownloadingModel = false
-                    self.modelDownloadProgress = 0.0
                 }
                 throw error
             }
@@ -645,9 +678,7 @@ final class ASRService: ObservableObject
         // Force reinitialization
         isAsrReady = false
         asrManager = nil
-
-        // Reinitialize to download fresh models
-        try await ensureAsrReady()
+        modelsExistOnDisk = false
     }
 
     // MARK: - Timer-based Streaming Transcription (No VAD)
@@ -677,7 +708,16 @@ final class ASRService: ObservableObject
     private func processStreamingChunk() async {
         guard isRunning else { return }
         
-        // Prevent concurrent transcription
+        // Use lock to prevent race conditions with CoreML
+        guard processingLock.try() else {
+            DebugLogger.shared.debug("⚠️ Skipping chunk - lock held by previous transcription", source: "ASRService")
+            skipNextChunk = true
+            return
+        }
+        
+        defer { processingLock.unlock() }
+        
+        // Double-check processing flag
         guard !isProcessingChunk else {
             DebugLogger.shared.debug("⚠️ Skipping chunk - previous transcription still in progress", source: "ASRService")
             skipNextChunk = true
@@ -696,14 +736,18 @@ final class ASRService: ObservableObject
         let minSamples = 16000  // 1 second minimum
         guard currentSampleCount >= minSamples else { return }
         
-        // Transcribe ALL audio from start (for full context)
+        // Copy the audio data to prevent mutation during processing
         let chunk = Array(recordedPCM[0..<currentSampleCount])
         
         isProcessingChunk = true
         let startTime = Date()
         
         do {
-            let result = try await manager.transcribe(chunk, source: .microphone)
+            // Run transcription on a dedicated queue to avoid blocking main thread updates
+            let result = try await Task.detached(priority: .userInitiated) {
+                try await manager.transcribe(chunk, source: .microphone)
+            }.value
+            
             let duration = Date().timeIntervalSince(startTime)
             let newText = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
             
@@ -716,7 +760,9 @@ final class ASRService: ObservableObject
                 DebugLogger.shared.debug("✅ Streaming: '\(updatedText)' (\(String(format: "%.2f", duration))s)", source: "ASRService")
             }
             
+            // If transcription takes >80% of interval, skip next to prevent queue buildup
             if duration > chunkDurationSeconds * 0.8 {
+                DebugLogger.shared.debug("⚠️ Transcription slow (\(String(format: "%.2f", duration))s), skipping next chunk", source: "ASRService")
                 skipNextChunk = true
             }
         } catch {

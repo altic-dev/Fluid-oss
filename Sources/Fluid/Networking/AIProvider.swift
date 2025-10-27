@@ -8,7 +8,16 @@ protocol AIProvider
 final class OpenAICompatibleProvider: AIProvider
 {
     struct ChatMessage: Codable { let role: String; let content: String }
-    struct ChatRequest: Codable { let model: String; let messages: [ChatMessage]; let temperature: Double? }
+    struct ChatRequest: Codable { 
+        let model: String
+        let messages: [ChatMessage]
+        let temperature: Double?
+        let reasoning_effort: String?
+        
+        enum CodingKeys: String, CodingKey {
+            case model, messages, temperature, reasoning_effort
+        }
+    }
     struct ChatChoiceMessage: Codable { let role: String; let content: String }
     struct ChatChoice: Codable { let index: Int?; let message: ChatChoiceMessage }
     struct ChatResponse: Codable { let choices: [ChatChoice] }
@@ -50,6 +59,13 @@ final class OpenAICompatibleProvider: AIProvider
         
         return false
     }
+    
+    // Helper function to detect if model is a gpt-oss model (Groq reasoning models)
+    private func isGptOssModel(_ modelName: String) -> Bool {
+        let modelLower = modelName.lowercased()
+        // Check for gpt-oss pattern or openai/ prefix (Groq's naming convention)
+        return modelLower.contains("gpt-oss") || modelLower.hasPrefix("openai/")
+    }
 
     func process(systemPrompt: String, userText: String, model: String, apiKey: String, baseURL: String) async -> String
     {
@@ -70,6 +86,9 @@ final class OpenAICompatibleProvider: AIProvider
         guard let url = URL(string: fullEndpoint) else { return "Error: Invalid Base URL" }
         
         let isLocal = isLocalEndpoint(endpoint)
+        
+        // Check if model is gpt-oss and add reasoning_effort parameter
+        let shouldAddReasoningEffort = isGptOssModel(model)
 
         let body = ChatRequest(
             model: model,
@@ -77,7 +96,8 @@ final class OpenAICompatibleProvider: AIProvider
                 ChatMessage(role: "system", content: systemPrompt),
                 ChatMessage(role: "user", content: userText)
             ],
-            temperature: 0.2
+            temperature: 0.2,
+            reasoning_effort: shouldAddReasoningEffort ? "low" : nil
         )
 
         guard let jsonData = try? JSONEncoder().encode(body) else { return "Error: Failed to encode request" }

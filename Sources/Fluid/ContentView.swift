@@ -69,7 +69,6 @@ struct ContentView: View {
     @EnvironmentObject private var menuBarManager: MenuBarManager
     @State private var hotkeyManager: GlobalHotkeyManager? = nil
     @State private var hotkeyManagerInitialized: Bool = false
-    @State private var overlay: ListeningOverlayController? = nil
     
     @State private var appear = false
     @State private var accessibilityEnabled = false
@@ -79,9 +78,6 @@ struct ContentView: View {
     @State private var pendingModifierKeyCode: UInt16?
     @State private var pendingModifierOnly = false
     @FocusState private var isTranscriptionFocused: Bool
-    
-    @State private var overlayVisible: Bool = false
-    @State private var overlayAudioLevelThrottled: Any? = nil
     
     @State private var selectedSidebarItem: SidebarItem? = .welcome
     @State private var playgroundUsed: Bool = false
@@ -105,6 +101,7 @@ struct ContentView: View {
     @State private var enableDebugLogs: Bool = SettingsStore.shared.enableDebugLogs
     @State private var pressAndHoldModeEnabled: Bool = SettingsStore.shared.pressAndHoldMode
     @State private var enableStreamingPreview: Bool = SettingsStore.shared.enableStreamingPreview
+    @State private var copyToClipboard: Bool = SettingsStore.shared.copyTranscriptionToClipboard
 
     // Preferences Tab State
     @State private var launchAtStartup: Bool = SettingsStore.shared.launchAtStartup
@@ -136,7 +133,7 @@ struct ContentView: View {
         case unknown, testing, success, failed
     }
     @State private var savedProviders: [SettingsStore.SavedProvider] = []
-    @State private var selectedProviderID: String = "openai"
+    @State private var selectedProviderID: String = SettingsStore.shared.selectedProviderID
     @State private var showingSaveProvider: Bool = false
     @State private var newProviderName: String = ""
     @State private var newProviderModels: String = ""
@@ -182,13 +179,9 @@ struct ContentView: View {
             
             // Initialize hotkey manager with improved timing and validation
             initializeHotkeyManagerIfNeeded()
-            if overlay == nil {
-                overlay = ListeningOverlayController(asrService: asr)
-            }
             
-            if overlayAudioLevelThrottled == nil {
-                overlayAudioLevelThrottled = asr.audioLevelPublisher as Any
-            }
+            // Note: Overlay is now managed by MenuBarManager (persists even when window closed)
+            
             // Load devices and defaults
             refreshDevices()
             if selectedInputUID.isEmpty, let defIn = AudioDevice.getDefaultInputDevice()?.uid { selectedInputUID = defIn }
@@ -359,7 +352,7 @@ struct ContentView: View {
         }
         .onDisappear {
             asr.stopWithoutTranscription()
-            overlay?.hide()
+            // Note: Overlay lifecycle is now managed by MenuBarManager
         }
         .onChange(of: hotkeyShortcut) { newValue in
             DebugLogger.shared.debug("Hotkey shortcut changed to \(newValue.displayString)", source: "ContentView")
@@ -371,36 +364,9 @@ struct ContentView: View {
                 DebugLogger.shared.debug("Hotkey manager initialized: \(self.hotkeyManagerInitialized)", source: "ContentView")
             }
         }
-        .onChange(of: asr.isRunning) { running in
-            // Prevent rapid state changes that could cause cycles
-            guard overlayVisible != running else { return }
-            
-            let delay: DispatchTimeInterval = .milliseconds(150)
-            if running {
-                overlayVisible = true
-                DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-                    guard self.overlayVisible else { return }
-                    let hosting = NSHostingView(rootView: ListeningOverlayView(audioLevelPublisher: self.asr.audioLevelPublisher))
-                    hosting.wantsLayer = true
-                    hosting.layer?.cornerRadius = 20
-                    hosting.layer?.masksToBounds = true
-                    self.overlay?.show(with: hosting, showPreview: self.enableStreamingPreview)
-                }
-            } else {
-                overlayVisible = false
-                DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-                    guard !self.overlayVisible else { return }
-                    self.overlay?.hide()
-                    // Clear transcription text when hiding overlay
-                    self.overlay?.updateTranscriptionText("")
-                }
-            }
-        }
-        .onChange(of: asr.partialTranscription) { newText in
-            // Update overlay with streaming transcription preview (if enabled)
-            if enableStreamingPreview {
-                overlay?.updateTranscriptionText(newText)
-            }
+        .onChange(of: enableStreamingPreview) { enabled in
+            // Sync streaming preview setting to MenuBarManager's overlay
+            menuBarManager.updateOverlayPreviewSetting(enabled)
         }
     }
 
@@ -1443,29 +1409,80 @@ struct ContentView: View {
                             .foregroundStyle(.secondary)
                             .padding(.leading, 4)
 
-                        // Model status indicator (non-clickable)
-                        HStack {
+                        // Model status indicator with action buttons
+                        HStack(spacing: 12) {
                             if asr.isDownloadingModel {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    ProgressView(value: max(0.0, min(1.0, asr.modelDownloadProgress)))
-                                        .frame(width: 160)
-                                    Text(String(format: "Downloading Model… %d%%", Int(asr.modelDownloadProgress * 100)))
+                                HStack(spacing: 8) {
+                                    ProgressView()
+                                        .controlSize(.small)
+                                    Text("Downloading Model…")
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
                                 }
                             } else if asr.isAsrReady {
-                                Image(systemName: "checkmark.circle.fill")
-                                    .foregroundStyle(.green)
-                                Text("Model Ready")
+                                HStack(spacing: 8) {
+                                    Image(systemName: "checkmark.circle.fill")
+                                        .foregroundStyle(.green)
+                                    Text("Model Ready")
+                                        .font(.caption)
+                                        .fontWeight(.medium)
+                                        .foregroundStyle(.white)
+                                }
+                                
+                                Button(action: {
+                                    Task { await deleteModels() }
+                                }) {
+                                    HStack(spacing: 4) {
+                                        Image(systemName: "trash")
+                                        Text("Delete")
+                                    }
                                     .font(.caption)
-                                    .fontWeight(.medium)
-                                    .foregroundStyle(.white)
+                                    .foregroundStyle(.red)
+                                }
+                                .buttonStyle(.plain)
+                                .help("Delete downloaded models (~500MB)")
+                            } else if asr.modelsExistOnDisk {
+                                HStack(spacing: 8) {
+                                    Image(systemName: "doc.fill")
+                                        .foregroundStyle(.blue)
+                                    Text("Models on Disk (Not Loaded)")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                
+                                Button(action: {
+                                    Task { await deleteModels() }
+                                }) {
+                                    HStack(spacing: 4) {
+                                        Image(systemName: "trash")
+                                        Text("Delete")
+                                    }
+                                    .font(.caption)
+                                    .foregroundStyle(.red)
+                                }
+                                .buttonStyle(.plain)
+                                .help("Delete downloaded models (~500MB)")
                             } else {
-                                Image(systemName: "arrow.down.circle")
-                                    .foregroundStyle(.orange)
-                                Text("Model will download when needed")
+                                HStack(spacing: 8) {
+                                    Image(systemName: "arrow.down.circle")
+                                        .foregroundStyle(.orange)
+                                    Text("Models Not Downloaded")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                
+                                Button(action: {
+                                    Task { await downloadModels() }
+                                }) {
+                                    HStack(spacing: 4) {
+                                        Image(systemName: "arrow.down.circle.fill")
+                                        Text("Download")
+                                    }
                                     .font(.caption)
-                                    .foregroundStyle(.secondary)
+                                    .foregroundStyle(.blue)
+                                }
+                                .buttonStyle(.plain)
+                                .help("Download ASR models (~500MB)")
                             }
                         }
                         .padding(.horizontal, 12)
@@ -1664,12 +1681,33 @@ struct ContentView: View {
                             )
                             .onChange(of: enableStreamingPreview) { newValue in
                                 SettingsStore.shared.enableStreamingPreview = newValue
-                                // Dynamically resize overlay based on preview state
-                                overlay?.setPreviewEnabled(newValue)
+                                // Dynamically resize overlay based on preview state (via MenuBarManager)
+                                menuBarManager.updateOverlayPreviewSetting(newValue)
                                 // Clear overlay text if disabled
                                 if !newValue {
-                                    overlay?.updateTranscriptionText("")
+                                    menuBarManager.updateOverlayTranscription("")
                                 }
+                            }
+                            
+                            VStack(alignment: .leading, spacing: 12) {
+                                Toggle("Copy to Clipboard", isOn: $copyToClipboard)
+                                    .toggleStyle(GlassToggleStyle())
+                                Text("Automatically copy transcribed text to clipboard as a backup, useful when no text field is selected.")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 10)
+                            .background(
+                                RoundedRectangle(cornerRadius: 8)
+                                    .fill(.ultraThinMaterial.opacity(0.5))
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 8)
+                                            .stroke(.white.opacity(0.08), lineWidth: 1)
+                                    )
+                            )
+                            .onChange(of: copyToClipboard) { newValue in
+                                SettingsStore.shared.copyTranscriptionToClipboard = newValue
                             }
                         }
                     } else {
@@ -2337,7 +2375,9 @@ struct ContentView: View {
                             let name = newProviderName.trimmingCharacters(in: .whitespacesAndNewlines)
                             let base = newProviderBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
                             let api  = newProviderApiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-                            guard !name.isEmpty, !base.isEmpty, !api.isEmpty else { return }
+                            let isLocal = isLocalEndpoint(base)
+                            // Name and URL always required, API key only required for non-local endpoints
+                            guard !name.isEmpty, !base.isEmpty, (isLocal || !api.isEmpty) else { return }
 
                             let modelsList = newProviderModels
                                 .split(separator: ",")
@@ -2487,6 +2527,20 @@ struct ContentView: View {
                             if !list.contains(modelName) { list.append(modelName) }
                             availableModelsByProvider[key] = list
                             SettingsStore.shared.availableModelsByProvider = availableModelsByProvider
+                            
+                            // If this is a saved custom provider, update its models array too
+                            if let providerIndex = savedProviders.firstIndex(where: { $0.id == selectedProviderID }) {
+                                let updatedProvider = SettingsStore.SavedProvider(
+                                    id: savedProviders[providerIndex].id,
+                                    name: savedProviders[providerIndex].name,
+                                    baseURL: savedProviders[providerIndex].baseURL,
+                                    apiKey: savedProviders[providerIndex].apiKey,
+                                    models: list
+                                )
+                                savedProviders[providerIndex] = updatedProvider
+                                saveSavedProviders()
+                            }
+                            
                             // Reflect in UI list
                             availableModels = list
                             selectedModel = modelName
@@ -2545,6 +2599,19 @@ struct ContentView: View {
                         selectedModel = availableModels.first ?? selectedModel
                         selectedModelByProvider[currentProvider] = selectedModel
                         SettingsStore.shared.selectedModelByProvider = selectedModelByProvider
+                        
+                        // If this is a saved custom provider, reset its models array too
+                        if let providerIndex = savedProviders.firstIndex(where: { $0.id == selectedProviderID }) {
+                            let updatedProvider = SettingsStore.SavedProvider(
+                                id: savedProviders[providerIndex].id,
+                                name: savedProviders[providerIndex].name,
+                                baseURL: savedProviders[providerIndex].baseURL,
+                                apiKey: savedProviders[providerIndex].apiKey,
+                                models: availableModels
+                            )
+                            savedProviders[providerIndex] = updatedProvider
+                            saveSavedProviders()
+                        }
                     }
                     .buttonStyle(GlassButtonStyle())
                     .buttonHoverEffect()
@@ -2562,6 +2629,9 @@ struct ContentView: View {
         }
         .padding(20)
         .onAppear {
+            // Load saved provider ID first
+            selectedProviderID = SettingsStore.shared.selectedProviderID
+            
             // Establish provider context first
             updateCurrentProvider()
 
@@ -2640,12 +2710,15 @@ struct ContentView: View {
                 SettingsStore.shared.selectedModelByProvider = selectedModelByProvider
             }
         }
+        .onChange(of: selectedProviderID) { newValue in
+            SettingsStore.shared.selectedProviderID = newValue
+        }
     }
 
     // MARK: - Meeting Transcription (Coming Soon)
     private var meetingToolsView: some View
     {
-        MeetingTranscriptionView()
+        MeetingTranscriptionView(asrService: asr)
     }
 
     // MARK: - Feedback View
@@ -3134,7 +3207,12 @@ struct ContentView: View {
         }
 
         struct ChatMessage: Codable { let role: String; let content: String }
-        struct ChatRequest: Codable { let model: String; let messages: [ChatMessage]; let temperature: Double? }
+        struct ChatRequest: Codable { 
+            let model: String
+            let messages: [ChatMessage]
+            let temperature: Double?
+            let reasoning_effort: String?
+        }
         struct ChatChoiceMessage: Codable { let role: String; let content: String }
         struct ChatChoice: Codable { let index: Int?; let message: ChatChoiceMessage }
         struct ChatResponse: Codable { let choices: [ChatChoice] }
@@ -3144,13 +3222,18 @@ struct ContentView: View {
         let systemPrompt = buildSystemPrompt(appInfo: appInfo)
         DebugLogger.shared.debug("Using app context for AI: app=\(appInfo.name), bundleId=\(appInfo.bundleId), title=\(appInfo.windowTitle)", source: "ContentView")
         
+        // Check if model is gpt-oss (Groq reasoning models) and add reasoning_effort parameter
+        let modelLower = selectedModel.lowercased()
+        let shouldAddReasoningEffort = modelLower.contains("gpt-oss") || modelLower.hasPrefix("openai/")
+        
         let body = ChatRequest(
             model: selectedModel,
             messages: [
                 ChatMessage(role: "system", content: systemPrompt),
                 ChatMessage(role: "user", content: inputText)
             ],
-            temperature: 0.2
+            temperature: 0.2,
+            reasoning_effort: shouldAddReasoningEffort ? "low" : nil
         )
 
         guard let jsonData = try? JSONEncoder().encode(body) else {
@@ -3228,6 +3311,11 @@ struct ContentView: View {
 
         DebugLogger.shared.info("Transcription finalized (chars: \(finalText.count))", source: "ContentView")
 
+        // Copy to clipboard if enabled (happens before typing as a backup)
+        if SettingsStore.shared.copyTranscriptionToClipboard {
+            ClipboardService.copyToClipboard(finalText)
+        }
+
         await MainActor.run {
             let frontmostApp = NSWorkspace.shared.frontmostApplication
             let frontmostName = frontmostApp?.localizedName ?? "Unknown"
@@ -3253,24 +3341,36 @@ struct ContentView: View {
         asr.start()
     }
     
-    // MARK: - ASR Model Preloading
-    private func preloadASRModel() async {
-        DebugLogger.shared.debug("Starting ASR model preload on app startup", source: "ContentView")
-        // Call the ASR service directly to preload the model
-        await MainActor.run {
-            asr.isDownloadingModel = true
-        }
+    // MARK: - ASR Model Management
+    
+    /// Manual download trigger - downloads models when user clicks button
+    private func downloadModels() async {
+        DebugLogger.shared.debug("User initiated model download", source: "ContentView")
         
         do {
             try await asr.ensureAsrReady()
-            DebugLogger.shared.info("ASR model preload completed successfully", source: "ContentView")
+            DebugLogger.shared.info("Model download completed successfully", source: "ContentView")
         } catch {
-            DebugLogger.shared.error("ASR model preload failed: \(error.localizedDescription)", source: "ContentView")
+            DebugLogger.shared.error("Failed to download models: \(error)", source: "ContentView")
         }
+    }
+    
+    /// Delete models from disk
+    private func deleteModels() async {
+        DebugLogger.shared.debug("User initiated model deletion", source: "ContentView")
         
-        await MainActor.run {
-            asr.isDownloadingModel = false
+        do {
+            try await asr.clearModelCache()
+            DebugLogger.shared.info("Models deleted successfully", source: "ContentView")
+        } catch {
+            DebugLogger.shared.error("Failed to delete models: \(error)", source: "ContentView")
         }
+    }
+    
+    // MARK: - ASR Model Preloading
+    private func preloadASRModel() async {
+        // DEPRECATED: No longer auto-loads on startup - models downloaded manually
+        DebugLogger.shared.debug("Skipping auto-preload - models downloaded manually via UI", source: "ContentView")
     }
     
     // MARK: - API Connection Testing
@@ -3685,6 +3785,19 @@ struct ContentView: View {
         let key = providerKey(for: selectedProviderID)
         availableModelsByProvider[key] = availableModels
         SettingsStore.shared.availableModelsByProvider = availableModelsByProvider
+        
+        // If this is a saved custom provider, update its models array too
+        if let providerIndex = savedProviders.firstIndex(where: { $0.id == selectedProviderID }) {
+            let updatedProvider = SettingsStore.SavedProvider(
+                id: savedProviders[providerIndex].id,
+                name: savedProviders[providerIndex].name,
+                baseURL: savedProviders[providerIndex].baseURL,
+                apiKey: savedProviders[providerIndex].apiKey,
+                models: availableModels
+            )
+            savedProviders[providerIndex] = updatedProvider
+            saveSavedProviders()
+        }
         
         // Update selected model mapping for this provider
         selectedModelByProvider[key] = selectedModel

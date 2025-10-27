@@ -2,8 +2,14 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct MeetingTranscriptionView: View {
-    @StateObject private var transcriptionService = MeetingTranscriptionService()
+    let asrService: ASRService
+    @StateObject private var transcriptionService: MeetingTranscriptionService
     @State private var selectedFileURL: URL?
+    
+    init(asrService: ASRService) {
+        self.asrService = asrService
+        self._transcriptionService = StateObject(wrappedValue: MeetingTranscriptionService(asrService: asrService))
+    }
     @State private var showingFilePicker = false
     @State private var showingExportDialog = false
     @State private var exportFormat: ExportFormat = .text
@@ -384,7 +390,7 @@ struct TranscriptionDocument: FileDocument {
 // MARK: - Preview
 
 #Preview {
-    MeetingTranscriptionView()
+    MeetingTranscriptionView(asrService: ASRService())
         .frame(width: 700, height: 800)
 }
 

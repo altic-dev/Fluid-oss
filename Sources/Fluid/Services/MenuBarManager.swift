@@ -1,6 +1,7 @@
 import AppKit
 import Combine
 import PromiseKit
+import SwiftUI
 
 @MainActor
 final class MenuBarManager: ObservableObject {
@@ -11,6 +12,10 @@ final class MenuBarManager: ObservableObject {
     // References to app state
     private weak var asrService: ASRService?
     private var cancellables = Set<AnyCancellable>()
+    
+    // Overlay management (persistent, independent of window lifecycle)
+    private var overlay: ListeningOverlayController?
+    private var overlayVisible: Bool = false
     
     @Published var isRecording: Bool = false
     @Published var aiProcessingEnabled: Bool = false
@@ -44,6 +49,11 @@ final class MenuBarManager: ObservableObject {
     func configure(asrService: ASRService) {
         self.asrService = asrService
         
+        // Initialize overlay controller (persists for app lifetime)
+        if overlay == nil {
+            overlay = ListeningOverlayController(asrService: asrService)
+        }
+        
         // Subscribe to recording state changes
         asrService.$isRunning
             .receive(on: DispatchQueue.main)
@@ -51,11 +61,58 @@ final class MenuBarManager: ObservableObject {
                 self?.isRecording = isRunning
                 self?.updateMenuBarIcon()
                 self?.updateMenu()
+                
+                // Handle overlay lifecycle (independent of window state)
+                self?.handleOverlayState(isRunning: isRunning, asrService: asrService)
+            }
+            .store(in: &cancellables)
+        
+        // Subscribe to partial transcription updates for streaming preview
+        asrService.$partialTranscription
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] newText in
+                self?.overlay?.updateTranscriptionText(newText)
             }
             .store(in: &cancellables)
         
         // Subscribe to AI processing state
         aiProcessingEnabled = SettingsStore.shared.enableAIProcessing
+    }
+    
+    private func handleOverlayState(isRunning: Bool, asrService: ASRService) {
+        // Prevent rapid state changes that could cause cycles
+        guard overlayVisible != isRunning else { return }
+        
+        let delay: DispatchTimeInterval = .milliseconds(150)
+        if isRunning {
+            overlayVisible = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                guard let self = self, self.overlayVisible else { return }
+                let hosting = NSHostingView(rootView: ListeningOverlayView(audioLevelPublisher: asrService.audioLevelPublisher))
+                hosting.wantsLayer = true
+                hosting.layer?.cornerRadius = 20
+                hosting.layer?.masksToBounds = true
+                let showPreview = SettingsStore.shared.enableStreamingPreview
+                self.overlay?.show(with: hosting, showPreview: showPreview)
+            }
+        } else {
+            overlayVisible = false
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                guard let self = self, !self.overlayVisible else { return }
+                self.overlay?.hide()
+                // Clear transcription text when hiding overlay
+                self.overlay?.updateTranscriptionText("")
+            }
+        }
+    }
+    
+    // MARK: - Public API for overlay management (for ContentView to sync)
+    func updateOverlayTranscription(_ text: String) {
+        overlay?.updateTranscriptionText(text)
+    }
+    
+    func updateOverlayPreviewSetting(_ enabled: Bool) {
+        overlay?.setPreviewEnabled(enabled)
     }
     
     private func setupMenuBarSafely() {
