@@ -2,9 +2,19 @@
 
 Voice-to-text dictation app for macOS with AI enhancement.
 
-## 🎉 What's New in v1.3.3
+## 🎉 What's New in v1.3.4
 
-- **Local endpoint( Ollama) Integration for AI Post processing**: Run AI models locally for complete privacy and offline processing 
+- **Auto-Update System**: Daily update checking with settings to enable/disable automatic updates
+- **Enhanced Shortcut Modifiers**: Added 'fn' key support for global hotkey shortcuts
+- **Fixed Overlay Persistence**: Overlay now works reliably even when UI window is closed
+- **Model Management**: Manual model download and delete buttons for better control
+- **Clipboard Integration**: New option to copy transcription text to clipboard automatically
+- **Bug Fixes**: Fixed concurrency issues in animations, meeting transcription model duplication, and AI post-processing model loading
+- **Improved UX**: Model auto-loading after app restart and better overlay lifecycle management
+
+## Previous Updates (v1.3.3)
+
+- **Local endpoint (Ollama) Integration for AI Post processing**: Run AI models locally for complete privacy and offline processing 
 - **Meeting File Transcription**: Upload and transcribe audio/video files
 - **Enhanced Overlay**: Improved animations and controls for better user experience
 - **Live Preview Mode**: Real-time transcription preview in overlay
