@@ -74,16 +74,14 @@ gh release create "v$VERSION" "$ZIP_NAME" "$DMG_NAME" \
   --title "FluidVoice v$VERSION" \
   --notes "## What's New in v$VERSION
 
-UI improvements and updater testing
+New meeting transcription features and enhanced audio processing
 
 ### Changes
-- **Simplified Debug Settings**: Removed confusing debug logging toggle, kept only 'Reveal Log File' button
-- **Always-on Debug Logging**: Debug information is now always logged to help with troubleshooting
-- **Cleaner UI**: Streamlined debug settings section with better description
-- **Testing auto-updater**: Verifies the fixed updater works properly for FluidVoice → FluidVoice updates
-
-### Note
-This release tests the fixed updater from v1.3.1 and improves the debug settings interface.
+- **Meeting File Transcription**: Upload and transcribe audio/video files
+- **Enhanced Overlay**: Improved animations and controls for better user experience
+- **Live Preview Mode**: Real-time transcription preview in overlay
+- **Better Audio Handling**: Improved ASR service with enhanced streaming
+- **macOS 14 Support**: Updated to latest macOS version with FluidAudio 0.7.4
 
 "
 
