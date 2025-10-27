@@ -211,8 +211,8 @@ struct ContentView: View {
             }
             
             NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { event in
-                let eventModifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
-                let shortcutModifiers = hotkeyShortcut.modifierFlags.intersection([.command, .option, .control, .shift])
+                let eventModifiers = event.modifierFlags.intersection([.function, .command, .option, .control, .shift])
+                let shortcutModifiers = hotkeyShortcut.modifierFlags.intersection([.function, .command, .option, .control, .shift])
                 
                 DebugLogger.shared.debug("NSEvent \(event.type) keyCode=\(event.keyCode) recordingShortcut=\(isRecordingShortcut)", source: "ContentView")
 
@@ -284,7 +284,9 @@ struct ContentView: View {
 
                     // Modifiers are currently pressed
                     var actualKeyCode = event.keyCode
-                    if eventModifiers.contains(.command) {
+                    if eventModifiers.contains(.function) {
+                        actualKeyCode = 63 // fn key
+                    } else if eventModifiers.contains(.command) {
                         actualKeyCode = (event.keyCode == 55) ? 55 : 54 // 55 = left cmd, 54 = right cmd
                     } else if eventModifiers.contains(.option) {
                         actualKeyCode = (event.keyCode == 58) ? 58 : 61 // 58 = left opt, 61 = right opt
@@ -1283,6 +1285,28 @@ struct ContentView: View {
                             Text("Note: May require app restart to take effect.")
                                 .font(.caption2)
                                 .foregroundStyle(.secondary.opacity(0.7))
+
+                            Divider()
+
+                            Toggle(isOn: Binding(
+                                get: { SettingsStore.shared.autoUpdateCheckEnabled },
+                                set: { SettingsStore.shared.autoUpdateCheckEnabled = $0 }
+                            )) {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("Automatic Updates")
+                                        .font(.headline)
+                                    Text("Check for updates automatically once per day")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                            .toggleStyle(.switch)
+
+                            if let lastCheck = SettingsStore.shared.lastUpdateCheckDate {
+                                Text("Last checked: \(lastCheck.formatted(date: .abbreviated, time: .shortened))")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary.opacity(0.7))
+                            }
                         }
                     }
                     .padding(24)

@@ -151,6 +151,7 @@ final class GlobalHotkeyManager: NSObject
         let flags = event.flags
 
         var eventModifiers: NSEvent.ModifierFlags = []
+        if flags.contains(.maskSecondaryFn) { eventModifiers.insert(.function) }
         if flags.contains(.maskCommand) { eventModifiers.insert(.command) }
         if flags.contains(.maskAlternate) { eventModifiers.insert(.option) }
         if flags.contains(.maskControl) { eventModifiers.insert(.control) }
@@ -187,7 +188,8 @@ final class GlobalHotkeyManager: NSObject
         case .flagsChanged:
             guard shortcut.modifierFlags.isEmpty else { break }
 
-            let isModifierPressed = flags.contains(.maskCommand)
+            let isModifierPressed = flags.contains(.maskSecondaryFn)
+                || flags.contains(.maskCommand)
                 || flags.contains(.maskAlternate)
                 || flags.contains(.maskControl)
                 || flags.contains(.maskShift)
@@ -288,8 +290,8 @@ final class GlobalHotkeyManager: NSObject
 
     private func matchesShortcut(keyCode: UInt16, modifiers: NSEvent.ModifierFlags) -> Bool
     {
-        let relevantModifiers: NSEvent.ModifierFlags = modifiers.intersection([.command, .option, .control, .shift])
-        let shortcutModifiers = shortcut.modifierFlags.intersection([.command, .option, .control, .shift])
+        let relevantModifiers: NSEvent.ModifierFlags = modifiers.intersection([.function, .command, .option, .control, .shift])
+        let shortcutModifiers = shortcut.modifierFlags.intersection([.function, .command, .option, .control, .shift])
         return keyCode == shortcut.keyCode && relevantModifiers == shortcutModifiers
     }
 

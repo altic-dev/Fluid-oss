@@ -47,6 +47,36 @@ final class SimpleUpdater {
         "V4J43B279J"
     ]
 
+    // Silent check that returns update info without showing alerts or installing
+    func checkForUpdate(owner: String, repo: String) async throws -> (hasUpdate: Bool, latestVersion: String) {
+        let releasesURL = URL(string: "https://api.github.com/repos/\(owner)/\(repo)/releases")!
+
+        let (data, response) = try await URLSession.shared.data(from: releasesURL)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            throw SimpleUpdateError.invalidResponse
+        }
+
+        let releases: [GHRelease]
+        do {
+            releases = try JSONDecoder().decode([GHRelease].self, from: data)
+        } catch {
+            throw SimpleUpdateError.jsonDecoding
+        }
+
+        // choose latest non-prerelease release
+        guard let latest = releases.first(where: { !$0.prerelease }) else {
+            throw SimpleUpdateError.noSuitableRelease
+        }
+
+        let currentVersionString = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0.0"
+        let current = parseVersion(currentVersionString)
+        let latestTag = latest.tag_name
+        let latestVersion = parseVersion(latestTag)
+
+        // Return whether update is available
+        return (isVersion(latestVersion, greaterThan: current), latestTag)
+    }
+
     func checkAndUpdate(owner: String, repo: String) async throws {
         let releasesURL = URL(string: "https://api.github.com/repos/\(owner)/\(repo)/releases")!
 

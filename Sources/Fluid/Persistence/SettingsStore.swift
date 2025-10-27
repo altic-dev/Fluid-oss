@@ -31,6 +31,8 @@ final class SettingsStore
         static let pressAndHoldMode = "PressAndHoldMode"
         static let enableStreamingPreview = "EnableStreamingPreview"
         static let copyTranscriptionToClipboard = "CopyTranscriptionToClipboard"
+        static let autoUpdateCheckEnabled = "AutoUpdateCheckEnabled"
+        static let lastUpdateCheckDate = "LastUpdateCheckDate"
     }
 
     struct SavedProvider: Codable, Identifiable, Hashable
@@ -216,6 +218,46 @@ final class SettingsStore
             // Update dock visibility
             updateDockVisibility(newValue)
         }
+    }
+
+    var autoUpdateCheckEnabled: Bool
+    {
+        get {
+            let value = defaults.object(forKey: Keys.autoUpdateCheckEnabled)
+            return value as? Bool ?? true // Default to enabled
+        }
+        set {
+            defaults.set(newValue, forKey: Keys.autoUpdateCheckEnabled)
+        }
+    }
+
+    var lastUpdateCheckDate: Date?
+    {
+        get {
+            return defaults.object(forKey: Keys.lastUpdateCheckDate) as? Date
+        }
+        set {
+            defaults.set(newValue, forKey: Keys.lastUpdateCheckDate)
+        }
+    }
+
+    // MARK: - Update Check Helper
+
+    func shouldCheckForUpdates() -> Bool {
+        guard autoUpdateCheckEnabled else { return false }
+        
+        guard let lastCheck = lastUpdateCheckDate else {
+            // Never checked before, should check
+            return true
+        }
+        
+        // Check if more than 24 hours have passed
+        let dayInSeconds: TimeInterval = 24 * 60 * 60
+        return Date().timeIntervalSince(lastCheck) >= dayInSeconds
+    }
+
+    func updateLastCheckDate() {
+        lastUpdateCheckDate = Date()
     }
 
     // MARK: - Private Methods

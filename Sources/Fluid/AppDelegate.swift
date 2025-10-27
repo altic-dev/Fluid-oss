@@ -24,6 +24,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Initialize app settings (dock visibility, etc.)
         SettingsStore.shared.initializeAppSettings()
 
+        // Check for updates automatically if enabled
+        checkForUpdatesAutomatically()
+
         // Note: App UI is designed with dark color scheme in mind
         // All gradients and effects are optimized for dark mode
     }
@@ -59,6 +62,73 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                     self.showUpdateAlert(title: "Update Check Failed", message: "Unable to check for updates. Please try again later.\n\nError: \(error.localizedDescription)")
                 }
             }
+        }
+    }
+    
+    // MARK: - Automatic Update Check
+    
+    private func checkForUpdatesAutomatically() {
+        // Check if we should perform an automatic update check
+        guard SettingsStore.shared.shouldCheckForUpdates() else {
+            let reason = !SettingsStore.shared.autoUpdateCheckEnabled ? "disabled by user" : "checked recently"
+            DebugLogger.shared.debug("Automatic update check skipped (\(reason))", source: "AppDelegate")
+            return
+        }
+        
+        DebugLogger.shared.info("Scheduling automatic update check...", source: "AppDelegate")
+        
+        // Delay check slightly to avoid slowing down app launch
+        Task {
+            // Wait 3 seconds after launch before checking
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            
+            DebugLogger.shared.info("Performing automatic update check for altic-dev/Fluid-oss", source: "AppDelegate")
+            
+            do {
+                let result = try await SimpleUpdater.shared.checkForUpdate(owner: "altic-dev", repo: "Fluid-oss")
+                
+                // Update the last check date regardless of result
+                await MainActor.run {
+                    SettingsStore.shared.updateLastCheckDate()
+                }
+                
+                if result.hasUpdate {
+                    DebugLogger.shared.info("✅ Update available: \(result.latestVersion)", source: "AppDelegate")
+                    // Show update notification on main thread
+                    await showUpdateNotification(version: result.latestVersion)
+                } else {
+                    DebugLogger.shared.info("✅ App is up to date", source: "AppDelegate")
+                }
+            } catch {
+                // Silently log the error, don't bother the user with failed automatic checks
+                DebugLogger.shared.debug("Automatic update check failed: \(error.localizedDescription)", source: "AppDelegate")
+                
+                // Still update last check date to avoid hammering the API on failure
+                await MainActor.run {
+                    SettingsStore.shared.updateLastCheckDate()
+                }
+            }
+        }
+    }
+    
+    @MainActor
+    private func showUpdateNotification(version: String) {
+        DebugLogger.shared.info("Showing update notification for version \(version)", source: "AppDelegate")
+        
+        let alert = NSAlert()
+        alert.messageText = "Update Available"
+        alert.informativeText = "Fluid \(version) is now available. Would you like to install it now?\n\nThe app will restart automatically after installation."
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "Install Now")
+        alert.addButton(withTitle: "Later")
+        
+        let response = alert.runModal()
+        
+        if response == .alertFirstButtonReturn {
+            DebugLogger.shared.info("User chose to install update now", source: "AppDelegate")
+            checkForUpdatesManually()
+        } else {
+            DebugLogger.shared.info("User postponed update", source: "AppDelegate")
         }
     }
     
