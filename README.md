@@ -2,8 +2,22 @@
 
 Voice-to-text dictation app for macOS with AI enhancement.
 
-## Features
+## 🎉 What's New in v1.3.3
 
+- **Local endpoint( Ollama) Integration for AI Post processing**: Run AI models locally for complete privacy and offline processing 
+- **Meeting File Transcription**: Upload and transcribe audio/video files
+- **Enhanced Overlay**: Improved animations and controls for better user experience
+- **Live Preview Mode**: Real-time transcription preview in overlay
+- **Better Audio Handling**: Improved ASR service with enhanced streaming
+
+[Download Latest Release](https://github.com/altic-dev/Fluid-oss/releases/latest) | [View All Releases](https://github.com/altic-dev/Fluid-oss/releases)
+
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=altic-dev/Fluid-oss&type=Date)](https://star-history.com/#altic-dev/Fluid-oss&Date)
+
+## Features
+- **Live Preview Mode**: Real-time transcription preview in overlay
 - **Real-time transcription** using Parakeet TDT v3 model
 - **AI enhancement** with OpenAI, Groq, and custom providers
 - **25+ languages** with auto-detection
